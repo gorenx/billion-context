@@ -68,6 +68,38 @@ test("quick_check: a corrupt db fails open with a typed error, and the wrapper q
     }
 });
 
+test("quick_check escape hatch: BILI_STORAGE_QUICK_CHECK=0 skips the self-check at open", async () => {
+    const dir = freshDir();
+    try {
+        const path = join(dir, "index.db");
+        const store = UnifiedStore.open(path);
+        store.close();
+
+        // Same corruption fixture as above.
+        const raw = readFileSync(path);
+        for (let i = Math.floor(raw.length / 3); i < Math.floor(raw.length / 3) + 4096; i++) {
+            raw[i] = raw[i] ^ 0xff;
+        }
+        writeFileSync(path, raw);
+
+        // Negative direction of the gate (#3617): the documented trade-off for
+        // boot-time-sensitive huge deployments — with the check disabled, open
+        // proceeds even on a corrupt file instead of quarantining.
+        const prev = process.env.BILI_STORAGE_QUICK_CHECK;
+        process.env.BILI_STORAGE_QUICK_CHECK = "0";
+        try {
+            const skipped = UnifiedStore.open(path);
+            assert.ok(skipped, "open proceeds without the self-check");
+            skipped.close();
+        } finally {
+            if (prev === undefined) delete process.env.BILI_STORAGE_QUICK_CHECK;
+            else process.env.BILI_STORAGE_QUICK_CHECK = prev;
+        }
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
+
 test("backupInto: produces a consistent snapshot db that opens and holds the same sessions", async () => {
     const dir = freshDir();
     try {
