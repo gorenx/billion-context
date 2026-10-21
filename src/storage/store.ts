@@ -342,7 +342,19 @@ export class UnifiedStore {
         // boot-time-sensitive huge deployments via BILI_STORAGE_QUICK_CHECK=0.
         if (process.env.BILI_STORAGE_QUICK_CHECK !== "0") {
             const started = Date.now();
-            const rows = db.prepare("PRAGMA quick_check").all() as Array<{ quick_check?: unknown }>;
+            let rows: Array<{ quick_check?: unknown }>;
+            try {
+                rows = db.prepare("PRAGMA quick_check").all() as Array<{ quick_check?: unknown }>;
+            } catch (err) {
+                // A NOTADB-class file (garbage header) makes the check itself
+                // throw instead of returning a bad row. Same handle discipline
+                // as the pragma path below: close before rethrowing, or Windows
+                // cannot delete a file a live process still holds open
+                // (#2771/#2781 — the #4175 review caught this via EBUSY in the
+                // windows shard teardown of exactly these tests).
+                db.close();
+                throw err;
+            }
             const verdict = rows.map((row) => String(row.quick_check ?? "")).join(" ").trim();
             const durationMs = Date.now() - started;
             recordIntegrityOutcome(path, verdict === "ok", durationMs, verdict === "ok" ? undefined : verdict.slice(0, 400));

@@ -7,7 +7,7 @@
  * fails on the current tree.
  */
 import { strict as assert } from "node:assert";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -63,6 +63,42 @@ test("quick_check: a corrupt db fails open with a typed error, and the wrapper q
         // 3. Reopen — must fail with a typed, greppable integrity error
         //    (migrations must never run against a corrupt file).
         assert.throws(() => UnifiedStore.open(path), /quick_check|integrity/i);
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test("NOTADB-class corrupt index.db degrades to legacy-only AND closes its sqlite handle (#2771/#2781)", async () => {
+    const { UnifiedShadow } = await import("../src/storage/shadow.ts");
+    const dir = freshDir();
+    try {
+        // A garbage header makes quick_check's own statement throw a raw
+        // driver error instead of returning verdict rows — the failed open
+        // must still close the handle it created before propagating (#4175:
+        // the pre-fix raw-throw path leaked the handle until process exit).
+        writeFileSync(join(dir, "index.db"), Buffer.alloc(512, 0x5a));
+
+        const env = { ...process.env, BILI_STORAGE_UNIFIED: "full" };
+        assert.equal(UnifiedShadow.maybeOpen(dir, env), null, "degrades to legacy-only");
+
+        // Linux strictness: no fd of this process may point into the dir.
+        if (process.platform === "linux") {
+            const held: string[] = [];
+            for (const fd of readdirSync("/proc/self/fd")) {
+                try {
+                    if (readlinkSync(`/proc/self/fd/${fd}`).startsWith(dir)) held.push(fd);
+                } catch { /* raced fd — fine */ }
+            }
+            assert.deepEqual(held, [], `no lingering handle into ${dir}`);
+        }
+
+        // #2781 guard shape (cross-platform teeth on Windows): while any
+        // process holds a file inside a directory, Windows refuses to move
+        // it — a leaked handle turns this rename into EBUSY; POSIX rename is
+        // a no-op, so the dance is cheap everywhere and fatal where it matters.
+        const moved = `${dir}.moved`;
+        renameSync(dir, moved);
+        renameSync(moved, dir);
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }
