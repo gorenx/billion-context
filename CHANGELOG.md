@@ -5,6 +5,13 @@ Versions follow the merge of a `*_release-v*` branch; CI publishes to npm on tag
 
 ## [Unreleased]
 
+### 存储可靠性三件套:开库自检 + 在线备份 + 第二进程探测(#4175)
+
+- **开库自检**:每次 index.db 打开在迁移之前跑 `PRAGMA quick_check`;失败抛类型化错误,影子层捕获后自动隔离文件组(index.db/-wal/-shm → `.corrupt-<ts>`,与信封 corrupt 处理同款纪律)并重开新库——JSON 信封仍是恢复源,full 模式有机重导入。逃生口 `BILI_STORAGE_QUICK_CHECK=0`(超大库启动时间敏感)。结果与耗时进 runtime-status(`integrity` 字段)。
+- **在线备份**:`UnifiedStore.backupInto(dst)`(SQLite 原生 `VACUUM INTO`,WAL 活跃时安全、不阻塞写者;目标已存在拒绝覆盖)→ `SessionStore.unifiedBackup()` → `POST /__bili/storage/backup {dst?}`(缺省落 `sessionsDir/backups/index-<时间戳>.db`);`backup` 字段进 wire。自动调度不在本版——先给手动能力。
+- **同库第二进程探测**:`<db>.lock` 锁文件(存活外来 pid → 错误日志一次 + wire `secondProcess` 字段 + web 横幅,不硬拦——硬拦会把第二条 lane 砖掉,文档纪律是一会话目录一实例 #3633);死 pid 陈锁自动接管;close() 尽力删锁。堵 #3923/#3959 的检测盲区。
+
+
 ### dsh 归因正面修:llm/stream 会话身份随请求对象(#4082)
 
 - dsh 的 LlmRuntime 在每次派发上盖章 `options.sessionId`(主循环/压缩/标题生成,重试重发也重新盖章),且把 llm/stream waterfall 文档化为官方拦截点。插件现在把每条流的迭代包进以该 sid 为键的 AsyncLocalStorage:适配器的 fetch 读到的会话身份**跟随请求对象,不再依赖异步链形状**——429 重试链、无 initiator 的 agentless 侧调用(compaction/标题)、已销毁的 initiator 作用域、宿主运行时缺口(#2975/#3918/#4082)全部免疫。
