@@ -272,6 +272,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm install --ignore-scripts --no-fund --no-audit
+      # Parity with the test lane: the suites import acp-kernel through its
+      # dist bundle (file: dependency symlinked into node_modules), which only
+      # exists after the pretest build. Without it this job dies at import
+      # time with ERR_MODULE_NOT_FOUND kernel/dist/index.js on a clean
+      # checkout (reproduced locally; found while reviewing #4175/#4177).
+      - run: npm run pretest
       - run: node --import tsx --test tests/storage-backend-contract.test.ts tests/storage-backend-knob.test.ts
         env:
           BILI_MYSQL_TEST_DSN: mysql://root:bili-test-root@127.0.0.1:3306/bili
